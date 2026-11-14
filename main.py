@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""The Steam Bowl -- food-picture-01 entry.
+"""Smash burger with a molten cheese pull -- procedural food picture.
 
-A big bowl of tonkotsu ramen, close and slightly from above: chopsticks
-lifting a swirl of glossy noodles, a halved soft egg with a runny yolk,
-spring onions, nori, steam curling up, rich warm broth on a dark wooden
-table. Pure procedural drawing, Python stdlib only. No text anywhere.
-Deterministic: fixed seed, same bytes every run.
+Pure Python 3 stdlib. Deterministic: one fixed seed, no time/os input,
+no network. Writes a 1024x1024 PNG to <out>/entry.png, where <out> is
+MAKEFUN_OUTPUT_DIR, else /output if it exists and is writable, else /tmp.
 """
 import math
 import os
@@ -13,8 +11,150 @@ import random
 import struct
 import zlib
 
-W = H = 1024
+W = 1024
+H = 1024
 RNG = random.Random(20261114)
+PX = [bytearray(W * 3) for _ in range(H)]
+
+
+def mix(c0, c1, t):
+    return (int(c0[0] + (c1[0] - c0[0]) * t + 0.5),
+            int(c0[1] + (c1[1] - c0[1]) * t + 0.5),
+            int(c0[2] + (c1[2] - c0[2]) * t + 0.5))
+
+
+def hline(y, x0, x1, c):
+    if y < 0 or y >= H:
+        return
+    x0 = max(0, int(x0))
+    x1 = min(W - 1, int(x1))
+    if x1 < x0:
+        return
+    PX[y][x0 * 3:(x1 + 1) * 3] = bytes(c) * (x1 - x0 + 1)
+
+
+def fill_rect(x0, y0, x1, y1, c):
+    for y in range(max(0, int(y0)), min(H, int(y1) + 1)):
+        hline(y, x0, x1, c)
+
+
+def vgrad(y0, y1, c0, c1):
+    for y in range(max(0, y0), min(H, y1 + 1)):
+        t = (y - y0) / max(y1 - y0, 1)
+        fill_rect(0, y, W - 1, y, mix(c0, c1, t))
+
+
+def ellipse(cx, cy, rx, ry, c):
+    rx = float(rx)
+    ry = float(ry)
+    for y in range(max(0, int(cy - ry)), min(H, int(cy + ry) + 1)):
+        dy = (y - cy) / ry
+        d = 1.0 - dy * dy
+        if d <= 0:
+            continue
+        dx = rx * math.sqrt(d)
+        hline(y, cx - dx, cx + dx, c)
+
+
+def disc(cx, cy, r, c):
+    ellipse(cx, cy, r, r, c)
+
+
+def ellipse_outline(cx, cy, rx, ry, t, c):
+    for y in range(max(0, int(cy - ry)), min(H, int(cy + ry) + 1)):
+        dy = (y - cy) / ry
+        d = 1.0 - dy * dy
+        if d <= 0:
+            continue
+        dxo = rx * math.sqrt(d)
+        di = 1.0 - ((y - cy) / max(ry - t, 1.0)) ** 2
+        if di <= 0:
+            hline(y, cx - dxo, cx + dxo, c)
+        else:
+            dxi = max(rx - t, 1.0) * math.sqrt(di)
+            hline(y, cx - dxo, cx - dxi, c)
+            hline(y, cx + dxi, cx + dxo, c)
+
+
+def poly(pts, c):
+    ys = [p[1] for p in pts]
+    n = len(pts)
+    for y in range(max(0, int(min(ys))), min(H, int(max(ys)) + 1)):
+        xs = []
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            if (y0 <= y < y1) or (y1 <= y < y0):
+                xs.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+        xs.sort()
+        for i in range(0, len(xs) - 1, 2):
+            hline(y, xs[i], xs[i + 1], c)
+
+
+def glow(cx, cy, rmax, c_in, c_out, steps=22, squash=0.82):
+    for i in range(steps, 0, -1):
+        t = i / steps
+        ellipse(cx, cy, rmax * t, rmax * t * squash,
+                mix(c_in, c_out, t))
+
+
+def blend_ellipse(cx, cy, rx, ry, c, alpha):
+    for y in range(max(0, int(cy - ry)), min(H, int(cy + ry) + 1)):
+        dy = (y - cy) / ry
+        d = 1.0 - dy * dy
+        if d <= 0:
+            continue
+        dx = int(rx * math.sqrt(d))
+        row = PX[y]
+        for x in range(max(0, int(cx - dx)), min(W, int(cx + dx) + 1)):
+            o = x * 3
+            row[o] = int(row[o] + (c[0] - row[o]) * alpha + 0.5)
+            row[o + 1] = int(row[o + 1] + (c[1] - row[o + 1]) * alpha + 0.5)
+            row[o + 2] = int(row[o + 2] + (c[2] - row[o + 2]) * alpha + 0.5)
+
+
+def bez(p0, p1, p2, steps=26):
+    pts = []
+    for i in range(steps + 1):
+        t = i / steps
+        u = 1.0 - t
+        pts.append((u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+                    u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1]))
+    return pts
+
+
+def strand(pts, r0, r1, c, hi):
+    n = len(pts)
+    for i, (x, y) in enumerate(pts):
+        t = i / max(n - 1, 1)
+        r = r0 + (r1 - r0) * t
+        disc(x, y, r, c)
+        disc(x - r * 0.35, y, r * 0.3, hi)
+
+
+def drip(x, y0, depth, w, c, hi):
+    fill_rect(x - w // 2, y0, x + w // 2, y0 + depth, c)
+    disc(x, y0 + depth, w // 2, c)
+    disc(x, y0, w // 2, c)
+    hline(y0 + depth // 2, x - w // 2 + 3, x - w // 2 + 8, hi)
+
+
+def _chunk(typ, data):
+    ch = struct.pack(">I", len(data)) + typ + data
+    return ch + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
+
+
+def write_png(path):
+    raw = bytearray()
+    for row in PX:
+        raw.append(0)
+        raw.extend(row)
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
+           + _chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+           + _chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
 
 
 def out_dir():
@@ -26,331 +166,119 @@ def out_dir():
     return "/tmp"
 
 
-class Canvas:
-    def __init__(self, w, h):
-        self.w = w
-        self.h = h
-        self.px = bytearray(w * h * 3)
-
-    def fill(self, r, g, b):
-        self.px[:] = bytes((r, g, b)) * (self.w * self.h)
-
-    def _row(self, y, x0, x1, r, g, b):
-        if y < 0 or y >= self.h:
-            return
-        x0 = max(0, int(x0))
-        x1 = min(self.w - 1, int(x1))
-        if x1 < x0:
-            return
-        i = (y * self.w + x0) * 3
-        self.px[i:i + (x1 - x0 + 1) * 3] = bytes((r, g, b)) * (x1 - x0 + 1)
-
-    def blend_row(self, y, x0, x1, r, g, b, a):
-        if y < 0 or y >= self.h or a <= 0:
-            return
-        x0 = max(0, int(x0))
-        x1 = min(self.w - 1, int(x1))
-        if x1 < x0:
-            return
-        px = self.px
-        inv = 255 - a
-        for x in range(x0, x1 + 1):
-            i = (y * self.w + x) * 3
-            px[i] = (r * a + px[i] * inv) // 255
-            px[i + 1] = (g * a + px[i + 1] * inv) // 255
-            px[i + 2] = (b * a + px[i + 2] * inv) // 255
-
-    def ellipse(self, cx, cy, rx, ry, r, g, b, a=255):
-        for y in range(int(cy - ry), int(cy + ry) + 1):
-            dy = (y - cy) / ry
-            if abs(dy) > 1:
-                continue
-            dx = rx * math.sqrt(1 - dy * dy)
-            if a >= 255:
-                self._row(y, cx - dx, cx + dx, r, g, b)
-            else:
-                self.blend_row(y, cx - dx, cx + dx, r, g, b, a)
-
-    def circle(self, cx, cy, rad, r, g, b, a=255):
-        self.ellipse(cx, cy, rad, rad, r, g, b, a)
-
-    def poly(self, pts, r, g, b, a=255):
-        ys = [p[1] for p in pts]
-        n = len(pts)
-        for y in range(int(min(ys)), int(max(ys)) + 1):
-            xs = []
-            for i in range(n):
-                x1, y1 = pts[i]
-                x2, y2 = pts[(i + 1) % n]
-                if (y1 <= y < y2) or (y2 <= y < y1):
-                    t = (y - y1) / (y2 - y1)
-                    xs.append(x1 + t * (x2 - x1))
-            xs.sort()
-            for k in range(0, len(xs) - 1, 2):
-                if a >= 255:
-                    self._row(y, xs[k], xs[k + 1], r, g, b)
-                else:
-                    self.blend_row(y, xs[k], xs[k + 1], r, g, b, a)
-
-
-def cubic(p0, p1, p2, p3, t):
-    u = 1 - t
-    return (u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0]
-            + t * t * t * p3[0],
-            u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1]
-            + t * t * t * p3[1])
-
-
-def strand(cv, p0, p1, p2, p3, rad, col, n=40, hi=None, clip=None):
-    pts = [cubic(p0, p1, p2, p3, i / (n - 1)) for i in range(n)]
-    for (x, y) in pts:
-        if clip and not clip(x, y):
-            continue
-        cv.circle(x, y, rad, *col)
-    if hi:
-        for (x, y) in pts:
-            if clip and not clip(x, y):
-                continue
-            cv.circle(x - 1, y - 1, max(1, rad // 2), *hi)
-
-
-def png_bytes(cv):
-    raw = bytearray()
-    stride = cv.w * 3
-    for y in range(cv.h):
-        raw.append(0)
-        raw += cv.px[y * stride:(y + 1) * stride]
-
-    def chunk(tag, data):
-        return (struct.pack(">I", len(data)) + tag + data
-                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
-
-    ihdr = struct.pack(">IIBBBBB", cv.w, cv.h, 8, 2, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
-            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-            + chunk(b"IEND", b""))
-
-
-def grade(cv):
-    """Vignette the edges, warm the light from the upper left."""
-    px = cv.px
-    w = cv.w
-    h = cv.h
-    for y in range(h):
-        ny = (y - h / 2) / (h / 2)
-        base = y * w * 3
-        for x in range(w):
-            nx = (x - w / 2) / (w / 2)
-            d = math.sqrt(nx * nx + ny * ny)
-            v = 1.0
-            if d > 0.55:
-                v = 1.0 - 0.30 * min(1.0, (d - 0.55) / 0.5)
-            lx = (x - 190) / 720.0
-            ly = (y - 150) / 720.0
-            l2 = lx * lx + ly * ly
-            warm = 0.10 * max(0.0, 1.0 - l2)
-            i = base + x * 3
-            px[i] = min(255, int(px[i] * v + 255 * warm * 0.9))
-            px[i + 1] = min(255, int(px[i + 1] * v + 255 * warm * 0.55))
-            px[i + 2] = max(0, min(255, int(px[i + 2] * v - 255 * warm * 0.15)))
-
-
-def draw_table(cv):
-    cv.fill(59, 36, 22)
-    # wood grain: wavy horizontal streaks, two tones
-    for gi in range(26):
-        y0 = 30 + gi * 38 + RNG.randint(-6, 6)
-        ph = RNG.uniform(0, 6.28)
-        tone = (42, 24, 12) if gi % 3 else (78, 47, 26)
-        for x in range(0, W, 26):
-            y = y0 + int(4 * math.sin(x / 180.0 + ph))
-            cv._row(y, x, x + 26, *tone)
-            cv._row(y + 1, x, x + 26, *tone)
-    # plank seams
-    for sx in (330, 690):
-        for y in range(H):
-            cv.blend_row(y, sx, sx + 2, 20, 11, 6, 90)
-
-
-def draw_bowl(cv):
-    # soft shadow under the bowl
-    cv.ellipse(512, 902, 412, 58, 12, 7, 4, 70)
-    cv.ellipse(512, 894, 392, 48, 12, 7, 4, 60)
-    # outer bowl, inner wall, broth
-    cv.ellipse(512, 575, 405, 315, 29, 40, 49)
-    cv.ellipse(512, 570, 388, 300, 43, 60, 71)
-    cv.ellipse(512, 565, 362, 278, 168, 90, 22)
-    cv.ellipse(512, 550, 300, 225, 192, 122, 36)
-    cv.ellipse(470, 520, 200, 140, 217, 143, 46, 120)
-    # rim highlight, upper-left arc
-    for k in range(70):
-        t = math.pi * (1.05 + 0.55 * k / 69)
-        x = 512 + 396 * math.cos(t)
-        y = 572 + 306 * math.sin(t)
-        cv.circle(x, y, 4, 150, 175, 190, 150)
-
-
-def broth_bits(cv):
-    # oil droplets with a gloss dot each
-    for _ in range(24):
-        a = RNG.uniform(0, 6.28)
-        rr = math.sqrt(RNG.uniform(0.1, 0.9))
-        x = 512 + 330 * rr * math.cos(a)
-        y = 565 + 250 * rr * math.sin(a)
-        r = RNG.randint(5, 12)
-        cv.circle(x, y, r, 232, 168, 60, 200)
-        cv.circle(x - r // 3, y - r // 3, 2, 255, 240, 200, 170)
-    # sesame seeds
-    for _ in range(34):
-        a = RNG.uniform(0, 6.28)
-        rr = math.sqrt(RNG.uniform(0.05, 0.95))
-        x = 512 + 340 * rr * math.cos(a)
-        y = 565 + 258 * rr * math.sin(a)
-        cv.circle(x, y, 2, 242, 227, 192, 220)
-
-
-def draw_nori(cv):
-    cv.poly([(428, 332), (582, 316), (602, 432), (448, 448)], 22, 36, 26)
-    cv.poly([(440, 344), (578, 330), (586, 352), (446, 364)], 42, 68, 38)
-
-
-def draw_chashu(cv):
-    for (cx, cy, r) in ((715, 620, 80), (778, 522, 66)):
-        cv.circle(cx, cy, r, 150, 96, 62)
-        cv.circle(cx, cy, int(r * 0.78), 217, 154, 110)
-        cv.circle(cx - r // 4, cy - r // 4, int(r * 0.3), 232, 178, 134)
-        for _ in range(12):
-            a = RNG.uniform(0, 6.28)
-            rr = RNG.uniform(0.2, 0.85) * r
-            cv.circle(cx + rr * math.cos(a), cy + rr * math.sin(a),
-                      RNG.randint(2, 5), 138, 75, 46, 200)
-
-
-def draw_egg(cv):
-    cv.ellipse(336, 700, 96, 67, 217, 201, 168, 120)
-    cv.ellipse(330, 690, 100, 72, 243, 234, 214)
-    cv.circle(330, 690, 44, 224, 138, 12)
-    cv.circle(330, 690, 30, 242, 165, 31)
-    cv.circle(318, 678, 7, 255, 240, 200, 180)
-    cv.circle(330, 690, 12, 250, 190, 80, 120)
-
-
-def in_broth(x, y):
-    return ((x - 512) / 362.0) ** 2 + ((y - 565) / 278.0) ** 2 <= 1.0
-
-
-def draw_onions(cv):
-    for _ in range(46):
-        a = RNG.uniform(0, 6.28)
-        rr = math.sqrt(RNG.uniform(0.05, 0.95))
-        x = 512 + 340 * rr * math.cos(a)
-        y = 565 + 258 * rr * math.sin(a)
-        if RNG.random() < 0.7:
-            cv.circle(x, y, RNG.randint(4, 6), 78, 155, 62)
-            cv.circle(x, y, 2, 140, 203, 102)
-        else:
-            cv.circle(x, y, RNG.randint(3, 5), 232, 232, 216)
-
-
-NOODLE = (227, 185, 92)
-NOODLE_DARK = (192, 138, 53)
-NOODLE_HI = (242, 206, 126)
-
-
-def draw_bowl_noodles(cv):
-    # central swirl: three concentric arcs
-    for (rx, ry, col) in ((150, 105, NOODLE), (115, 80, NOODLE_DARK),
-                          (80, 55, NOODLE_HI)):
-        for k in range(90):
-            t = 6.28 * k / 89
-            x = 520 + rx * math.cos(t)
-            y = 560 + ry * math.sin(t)
-            if in_broth(x, y):
-                cv.circle(x, y, 6, *col)
-    # loose strands across the broth
-    for _ in range(52):
-        sx = RNG.uniform(220, 800)
-        sy = RNG.uniform(360, 790)
-        if not in_broth(sx, sy):
-            continue
-        ex = sx + RNG.uniform(-160, 160)
-        ey = sy + RNG.uniform(-70, 70)
-        if not in_broth(ex, ey):
-            continue
-        col = RNG.choice([NOODLE, NOODLE, NOODLE_DARK, NOODLE_HI])
-        hi = (250, 220, 150) if col != NOODLE_HI else None
-        strand(cv, (sx, sy),
-               (sx + RNG.uniform(-90, 90), sy + RNG.uniform(-60, 60)),
-               (ex + RNG.uniform(-90, 90), ey + RNG.uniform(-60, 60)),
-               (ex, ey), RNG.randint(5, 6), col, hi=hi, clip=in_broth)
-
-
-def draw_chopsticks(cv):
-    cv.poly([(880, 92), (652, 298), (641, 311), (870, 106)], 122, 68, 35)
-    cv.poly([(884, 100), (654, 300), (648, 307), (878, 108)], 154, 92, 51)
-    cv.poly([(908, 138), (674, 316), (665, 329), (900, 151)], 107, 58, 30)
-    cv.poly([(911, 145), (675, 318), (670, 325), (904, 153)], 138, 82, 46)
-
-
-def draw_lifted_noodles(cv):
-    # a glossy bundle rising from the broth to the chopstick tips
-    for i in range(22):
-        spread = (i - 11) / 11.0
-        sx = 585 + spread * 70 + RNG.uniform(-12, 12)
-        sy = 452 + abs(spread) * 26 + RNG.uniform(-8, 8)
-        tx = 648 + spread * 26 + RNG.uniform(-8, 8)
-        ty = 302 + abs(spread) * 14 + RNG.uniform(-6, 6)
-        bow = 470 + spread * 150
-        col = RNG.choice([NOODLE, NOODLE, NOODLE_HI, NOODLE_DARK])
-        hi = (250, 220, 150) if col != NOODLE_HI else None
-        strand(cv, (sx, sy), (bow, 400), (bow + 60, 330), (tx, ty),
-               RNG.randint(5, 6), col, n=36, hi=hi)
-    # a few strands draped over the chopsticks themselves
-    for i in range(5):
-        x0 = 640 + i * 9
-        strand(cv, (x0, 296), (x0 + 14, 318), (x0 + 4, 336), (x0 - 8, 348),
-               5, NOODLE_HI, n=18, hi=(250, 220, 150))
-    # dangling strands falling back into the broth
-    for i in range(4):
-        x0 = 560 + i * 26
-        strand(cv, (x0, 470), (x0 - 18, 520), (x0 + 10, 560), (x0 - 4, 600),
-               5, NOODLE, n=22)
-
-
-def draw_steam(cv):
-    for wx in (430, 490, 550, 610, 662):
-        ph = RNG.uniform(0, 6.28)
-        for k in range(15):
-            t = k / 14.0
-            y = 390 - t * 270
-            x = wx + 22 * math.sin(t * 5.0 + ph) * (0.4 + t)
-            r = 9 + 14 * math.sin(t * 3.14)
-            cv.circle(x, y, r, 255, 250, 242, RNG.randint(12, 22))
-
-
 def draw():
-    cv = Canvas(W, H)
-    draw_table(cv)
-    draw_bowl(cv)
-    broth_bits(cv)
-    draw_nori(cv)
-    draw_chashu(cv)
-    draw_egg(cv)
-    draw_onions(cv)
-    draw_bowl_noodles(cv)
-    draw_chopsticks(cv)
-    draw_lifted_noodles(cv)
-    draw_steam(cv)
-    grade(cv)
-    return cv
+    # Backdrop: warm dark gradient, amber glow from upper left.
+    vgrad(0, H - 1, (48, 27, 16), (20, 11, 6))
+    glow(390, 290, 700, (128, 76, 34), (30, 17, 9), steps=48)
+    glow(370, 250, 380, (158, 96, 42), (60, 32, 14), steps=48)
+    # Wooden table.
+    fill_rect(0, 690, W - 1, H - 1, (56, 35, 19))
+    for yy in (762, 852, 942):
+        fill_rect(0, yy, W - 1, yy + 3, (36, 21, 11))
+    for _ in range(46):
+        gx = RNG.uniform(0, W)
+        gy = RNG.uniform(700, 1010)
+        ellipse(gx, gy, RNG.uniform(90, 320), RNG.uniform(1.5, 3.5),
+                (46, 28, 15) if RNG.random() < 0.6 else (76, 49, 27))
+    blend_ellipse(512, 880, 430, 130, (130, 76, 32), 0.22)
+    # Dark ceramic plate.
+    ellipse(512, 818, 398, 116, (56, 50, 46))
+    ellipse(512, 815, 378, 106, (40, 36, 33))
+    ellipse_outline(512, 815, 378, 106, 5, (96, 88, 78))
+    ellipse(430, 726, 120, 11, (124, 114, 102))
+    blend_ellipse(512, 895, 310, 34, (0, 0, 0), 0.28)
+
+    # Top bun: tall golden brioche dome, smooth vertical gradient.
+    for yy in range(350, 607):
+        t = (yy - 350) / 256.0
+        dy = (yy - 478) / 128.0
+        d = 1.0 - dy * dy
+        if d <= 0:
+            continue
+        dx = 295 * math.sqrt(d)
+        hline(yy, 512 - dx, 512 + dx, mix((234, 170, 86), (166, 98, 34), t))
+    ellipse(430, 402, 95, 14, (255, 232, 172))
+    for ry in range(430, 530, 8):
+        ex = 512 + 295 * math.sqrt(max(0.0, 1 - ((ry - 478) / 128.0) ** 2))
+        disc(ex - 9, ry, 6, (232, 152, 72))
+    # Lettuce ruffle peeking under the bun: flat overlapping leaves.
+    ellipse(512, 622, 296, 22, (64, 112, 30))
+    for i in range(34):
+        lx = 222 + i * 17.5 + RNG.uniform(-5, 5)
+        ellipse(lx, 628 + RNG.uniform(-3, 7), RNG.uniform(20, 30),
+                RNG.uniform(8, 12),
+                RNG.choice([(96, 160, 48), (78, 134, 38), (122, 182, 62)]))
+
+    # Tomato slice.
+    ellipse(512, 672, 282, 52, (196, 48, 30))
+    ellipse(512, 672, 258, 42, (218, 70, 44))
+    ellipse(410, 656, 110, 9, (248, 124, 78))
+    # Bottom bun (before the patty so the patty overlaps its top).
+    for yy in range(808, 925):
+        t = (yy - 808) / 116.0
+        dy = (yy - 866) / 58.0
+        d = 1.0 - dy * dy
+        if d <= 0:
+            continue
+        dx = 288 * math.sqrt(d)
+        hline(yy, 512 - dx, 512 + dx, mix((208, 144, 64), (158, 98, 36), t))
+    ellipse(400, 838, 140, 10, (226, 164, 84))
+    ellipse_outline(512, 866, 288, 58, 4, (140, 88, 30))
+    # Thick charred smash patty with glistening speckles.
+    ellipse(512, 772, 306, 84, (74, 38, 18))
+    ellipse(370, 730, 130, 13, (150, 86, 36))
+    for _ in range(260):
+        sx = RNG.uniform(222, 802)
+        sy = RNG.uniform(697, 847)
+        if ((sx - 512) / 290) ** 2 + ((sy - 772) / 75) ** 2 > 1:
+            continue
+        r = RNG.random()
+        col = (46, 24, 10) if r < 0.6 else ((96, 52, 22)
+              if r < 0.85 else (190, 110, 46))
+        disc(sx, sy, RNG.uniform(1.5, 4), col)
+
+    # Molten cheese draped over the patty, with glossy drips.
+    ellipse(512, 700, 302, 48, (246, 158, 24))
+    ellipse(512, 688, 295, 30, (255, 184, 64))
+    for x, depth, w in ((300, 62, 36), (420, 84, 42), (560, 56, 34),
+                        (690, 76, 40)):
+        drip(x, 716, depth, w, (246, 158, 24), (255, 200, 90))
+    # Cheese pull strands running down the front of the stack.
+    strand(bez((398, 600), (372, 648), (402, 704)), 21, 11,
+           (255, 168, 32), (255, 208, 96))
+    strand(bez((644, 600), (672, 648), (646, 704)), 23, 12,
+           (255, 168, 32), (255, 208, 96))
+    strand(bez((520, 602), (510, 650), (526, 700)), 12, 7,
+           (255, 168, 32), (255, 208, 96))
+
+    # Sesame seeds scattered on the dome.
+    for gx in range(6):
+        for gy in range(4):
+            sx = 290 + gx * 74 + RNG.uniform(-14, 14)
+            sy = 388 + gy * 30 + RNG.uniform(-10, 10)
+            if ((sx - 512) / 255) ** 2 + ((sy - 478) / 105) ** 2 > 1:
+                continue
+        rx = RNG.uniform(6, 9)
+        ellipse(sx, sy, rx, rx * 0.55, (214, 178, 120))
+        ellipse(sx - 1, sy - 1, rx * 0.9, rx * 0.5, (250, 230, 180))
+    # Thin steam wisps rising off the hot bun.
+    for wx in (380, 520, 650):
+        for i in range(36):
+            t = i / 35.0
+            y = 332 - t * 188
+            x = wx + math.sin(t * 5.2 + wx) * 14 - t * 10
+            disc(x, y, 8 - t * 4, (198, 182, 152))
+    # A few crumbs on the plate rim.
+    for cx, cy in ((180, 850), (860, 860), (150, 900), (880, 900)):
+        disc(cx, cy, 4, (120, 84, 44))
+        disc(cx + 8, cy + 5, 3, (90, 60, 30))
 
 
 def main():
-    cv = draw()
-    out = os.path.join(out_dir(), "entry.png")
-    with open(out, "wb") as f:
-        f.write(png_bytes(cv))
-    print(out)
+    draw()
+    d = out_dir()
+    os.makedirs(d, exist_ok=True)
+    write_png(os.path.join(d, "entry.png"))
 
 
 if __name__ == "__main__":

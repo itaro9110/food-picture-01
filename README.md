@@ -1,11 +1,11 @@
-# The Steam Bowl
+# The Cheese Pull — food-picture-01
 
-A big bowl of tonkotsu ramen, drawn procedurally with the Python
-standard library only: chopsticks lifting a swirl of glossy noodles,
-a halved soft egg with a runny yolk, chashu, spring onions, nori,
-steam curling up over rich warm broth on a dark wooden table.
+A smash burger hero shot, drawn procedurally in pure Python 3 stdlib:
+a tall golden brioche bun, a thick charred patty, molten cheese draped
+over the patty with glossy drips, and three cheese-pull strands running
+down the front of the stack. Warm dramatic side light, dark wooden
+table, dark ceramic plate, thin steam wisps above the bun.
 
-Run: `python3 main.py` — writes `entry.png` (1024x1024).
-
-The steam, the gloss on the broth and noodles, and the noodle pull are
-the hunger triggers; every surface carries visible texture.
+Run: `python3 main.py` — writes entry.png to MAKEFUN_OUTPUT_DIR,
+else /output, else /tmp. Deterministic: fixed seed, two runs are
+byte-identical.
