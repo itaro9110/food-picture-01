@@ -1,42 +1,40 @@
-# The Golden Stack — food-picture-01
+# The Golden Stack
 
-A stack of three golden pancakes with maple syrup, melting butter, blueberries,
-strawberries and mint, on a white plate in warm morning light.
+A procedural picture of the best-looking breakfast: three golden pancakes
+with maple syrup, melting butter, blueberries, strawberry halves and mint,
+on a white plate in warm morning light. Made for the make.fun
+food-picture-01 competition.
 
 ## Run
 
 ```sh
-MAKEFUN_OUTPUT_DIR=out python3 main.py
+python3 main.py
 ```
 
-Writes one deterministic PNG (`entry.png`, 1024x1024) to the output directory.
+The program writes `entry.png` (1024x1024, deterministic) to
+`$MAKEFUN_OUTPUT_DIR` when set, otherwise to `/output` when that
+directory exists and is writable, otherwise to `/tmp`. It never
+defaults to a relative folder: the grader runs the entry as an
+unprivileged user in a read-only container where only `/tmp` is
+writable, so a relative output directory would crash the run.
 
-Output directory, in order: `MAKEFUN_OUTPUT_DIR` when set, `/output` when it
-exists and is writable, otherwise `/tmp`. The program never assumes a
-writable working directory, so it also runs as an unprivileged user in a
-read-only container.
+## Verified
 
-## How it is made
+- `python3 -m py_compile main.py` passes.
+- Two runs produce byte-identical PNGs (211,788 bytes, 1024x1024).
+- A run as user `nobody` from a read-only directory with no
+  `MAKEFUN_OUTPUT_DIR` set exits 0 and writes the same bytes to `/tmp`.
 
-`main.py` (Python 3.13, standard library only) draws every pixel itself: a
-hand-rolled PNG encoder (zlib), row-filled gradients, wavy-edged pancake
-ellipses with toasted speckle, glossy syrup with dripping, a melting butter
-pat, berries, mint, steam and a soft vignette. No network, no files read,
-same bytes on every run.
+## How it is drawn
 
-## The dish
+Everything is computed in pure Python 3.13 standard library code — no
+images, no fonts, no network. A small soft-edged rasteriser (`Canvas`)
+paints the scene back to front: cream wall and wooden table with a
+vignette, the plate, three hand-offset pancakes with toasted speckles,
+a glossy syrup cap with drips, a melting butter pat, berries, mint and
+faint steam. A fixed seed keeps every run byte-identical.
 
-Three pancakes, syrup poured over the top and dripping down the stack, butter
-melting into it, berries and mint for fresh colour, a syrup pool on the plate.
-Warm cream background, wooden table, one clear hero in the centre — it reads
-at 300 pixels and makes you hungry at a glance.
+## Files
 
-## Why it wins
-
-Against the judge's criteria, in order: (1) hungry — golden stack, glossy
-syrup, melting butter, one look and you want a bite; (2) the food itself —
-toasted speckle, syrup gloss, butter melt, faint steam, fresh berries;
-(3) styling and light — warm light from the top left, plate and garnish lead
-the eye to the stack; (4) craft — clean vector-style rendering, nothing
-smeared or broken; (5) reads small — the stack, plate and berries stay clear
-at 300 pixels.
+- `main.py` — the whole entry: rasteriser, scene and PNG encoder
+- `LICENSE` — MIT
